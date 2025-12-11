@@ -27,7 +27,7 @@ except OSError:
     logger.info("✅ Downloaded and loaded spaCy model: en_core_web_sm")
 
 
-def extract_entities(text: str) -> List[Tuple[str, str]]:
+def extract_entities(chunk_text): #-> List[Tuple[str, str]]:
     """
     Extract named entities from text using spaCy.
     
@@ -38,9 +38,11 @@ def extract_entities(text: str) -> List[Tuple[str, str]]:
         List[Tuple[str, str]]: List of (entity_text, entity_label) tuples
     """
     try:
-        doc = nlp(text)
-        entities = [(ent.text.strip(), ent.label_) for ent in doc.ents if ent.text.strip()]
-        return entities
+        doc = nlp(chunk_text)
+        entities = [ent.text for ent in doc.ents if ent.label_ not in ["CARDINAL"]]
+        return list(set(entities))
+        # entities = [(ent.text.strip(), ent.label_) for ent in doc.ents if ent.text.strip()]
+        # return entities
     except Exception as e:
         logger.warning(f"⚠️ Entity extraction failed: {e}")
         return []

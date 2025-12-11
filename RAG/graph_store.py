@@ -6,7 +6,7 @@ for GraphRAG functionality.
 """
 import uuid
 import logging
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 from gqlalchemy import Memgraph
 
 import sys
@@ -202,32 +202,106 @@ def store_chunk_entity_relationship(chunk_id: str, entity_name: str, entity_labe
         logger.warning(f"⚠️ Failed to create entity relationship: {e}")
 
 
-def store_chunks_batch_in_memgraph(doc_id: str, chunks: list) -> int:
-    """
-    Store multiple chunks in Memgraph in a batch operation.
+# def store_chunks_batch_in_memgraph(doc_id: str, chunks: list) -> int:
+#     """
+#     Store multiple chunks in Memgraph in a batch operation.
     
-    Args:
-        doc_id (str): The parent Document ID
-        chunks (list): List of chunk dictionaries
+#     Args:
+#         doc_id (str): The parent Document ID
+#         chunks (list): List of chunk dictionaries
         
-    Returns:
-        int: Number of chunks stored
+#     Returns:
+#         int: Number of chunks stored
+#     """
+#     stored_count = 0
+#     entity_count = 0
+    
+#     for chunk in chunks:
+#         try:
+#             store_chunk_in_memgraph(doc_id, chunk)
+#             stored_count += 1
+            
+#             # Count entities
+#             entities = chunk.get("metadata", {}).get("entities", [])
+#             entity_count += len(entities)
+            
+#         except Exception as e:
+#             logger.warning(f"⚠️ Failed to store chunk: {e}")
+#             continue
+    
+#     logger.info(f"📊 Stored {stored_count}/{len(chunks)} chunks with {entity_count} entity relationships in Memgraph")
+#     return stored_count
+
+def store_chunks_batch_in_memgraph(document_id: str, chunks: List[Dict]) -> int:
     """
+    Stores all chunks + entity nodes + co-occurrence edges in Memgraph.
+    
+    Each chunk may have:
+    - chunk["page_content"]
+    - chunk["metadata"]["page_number"]
+    - chunk["metadata"]["entities"] (list)
+    - chunk["metadata"]["phrases"] (list)
+    """
+
     stored_count = 0
-    entity_count = 0
-    
+
     for chunk in chunks:
-        try:
-            store_chunk_in_memgraph(doc_id, chunk)
-            stored_count += 1
-            
-            # Count entities
-            entities = chunk.get("metadata", {}).get("entities", [])
-            entity_count += len(entities)
-            
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to store chunk: {e}")
-            continue
-    
-    logger.info(f"📊 Stored {stored_count}/{len(chunks)} chunks with {entity_count} entity relationships in Memgraph")
+        chunk_id = str(uuid.uuid4())
+
+        text = chunk.get("page_content", "")
+        meta = chunk.get("metadata", {})
+        page = meta.get("page_number", 1)
+        entities = meta.get("entities", [])
+
+        # === 1. Create the Chunk node ===
+        memgraph.execute(
+            """
+            MATCH (d:Document {id: $doc_id})
+            CREATE (c:Chunk {
+                id: $chunk_id,
+                text: $text,
+                page: $page
+            })
+            CREATE (d)-[:HAS_CHUNK]->(c)
+            """,
+            {
+                "doc_id": document_id,
+                "chunk_id": chunk_id,
+                "text": text,
+                "page": page,
+            }
+        )
+        stored_count += 1
+
+        # === 2. Create Entity nodes + MENTIONS edges ===
+        for ent in entities:
+            memgraph.execute(
+                """
+                MERGE (e:Entity {name: $name})
+                WITH e
+                MATCH (c:Chunk {id: $chunk_id})
+                MERGE (c)-[:MENTIONS]->(e)
+                """,
+                {"name": ent, "chunk_id": chunk_id}
+            )
+
+        # === 3. Create CO-OCCURS edges between every pair of entities ===
+        if len(entities) > 1:
+            for i in range(len(entities)):
+                for j in range(i + 1, len(entities)):
+                    e1 = entities[i]
+                    e2 = entities[j]
+
+                    memgraph.execute(
+                        """
+                        MERGE (a:Entity {name: $e1})
+                        MERGE (b:Entity {name: $e2})
+                        MERGE (a)-[r:CO_OCCURS]-(b)
+                        ON CREATE SET r.count = 1
+                        ON MATCH SET r.count = r.count + 1
+                        """,
+                        {"e1": e1, "e2": e2}
+                    )
+
+    logger.info(f"🕸️ Stored {stored_count} chunks + entity graph in Memgraph.")
     return stored_count
