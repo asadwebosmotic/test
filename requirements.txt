@@ -1,2 +1,13 @@
-gqlalchemy
-neo4j
+gqlalchemy==1.8.0
+qdrant-client==1.16.1
+pdfplumber==0.11.8
+pytesseract==0.3.13
+llama-parse==0.6.88
+pydantic-settings==2.12.0
+python-dotenv==1.2.1
+sentence-transformers==5.1.2
+spacy==3.8.11
+fastapi==0.104.1
+uvicorn==0.24.0
+google-generativeai==0.8.3
+python-multipart==0.0.9
