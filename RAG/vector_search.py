@@ -184,3 +184,31 @@ def search_qdrant_all_users(query: str, top_k: int = 5) -> List[Dict]:
     except Exception as e:
         logger.error(f"❌ Qdrant search failed: {e}")
         return []
+
+import numpy as np
+
+def cosine_sim(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+def filter_graph_chunks(graph_chunks, query, embed_model, threshold=0.42):
+    """Remove graph chunks that are not semantically relevant to the query."""
+    
+    if not graph_chunks:
+        return []
+
+    q_emb = embed_model.encode(f"query: {query}").tolist()
+    
+    filtered = []
+    for chunk in graph_chunks:
+        text = chunk.get("text") or chunk.get("page_content")
+        if not text:
+            continue
+
+        emb = embed_model.encode(f"passage: {text}").tolist()
+        score = cosine_sim(q_emb, emb)
+
+        if score >= threshold:
+            chunk["semantic_score"] = float(score)
+            filtered.append(chunk)
+
+    return filtered

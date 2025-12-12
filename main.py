@@ -4,7 +4,7 @@ Main FastAPI Application - Hybrid RAG Backend Service
 This module provides REST API endpoints for:
 - PDF upload and processing
 - Question answering using Hybrid Retrieval (Vector RAG + GraphRAG)
-- Enhanced with spaCy NLP for entity/phrase extraction
+- Enhanced with Gemini LLM for entity/phrase extraction
 """
 import os
 import logging
@@ -19,10 +19,11 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from RAG.pipeline import process_pdf_async
-from RAG.vector_search import search_qdrant, search_qdrant_enhanced
+from RAG.vector_search import search_qdrant, search_qdrant_enhanced, filter_graph_chunks
 from RAG.graph_search import expand_multi_chunk_context, get_chunks_by_entities
 from RAG.llm_engine import answer_with_gemini_async
 from RAG.nlp_engine import enhance_query_with_nlp
+from RAG.embedding_and_store import embed_model
 
 # === Configure logging ===
 logging.basicConfig(level=logging.INFO)
@@ -36,7 +37,7 @@ app = FastAPI(
     Hybrid Retrieval combining Vector RAG (Qdrant) and GraphRAG (Memgraph) 
     with Gemini 2.5 Flash for answer generation.
     
-    Enhanced with spaCy NLP for:
+    Enhanced with Gemini LLM for:
     - Entity extraction during document processing
     - Query enhancement using entities and noun phrases
     - Entity-based graph retrieval
@@ -114,7 +115,7 @@ async def upload_pdf(
     This endpoint:
     1. Saves the uploaded PDF temporarily
     2. Extracts text and chunks content
-    3. Enriches chunks with spaCy NLP (entities, noun phrases)
+    3. Enriches chunks with Gemini LLM (entities, noun phrases)
     4. Stores chunks in Qdrant (vector embeddings)
     5. Creates document, chunk, and entity nodes in Memgraph (graph)
     
@@ -183,10 +184,10 @@ async def ask_question(
     user_id: str = Query(default="anonymous", description="User identifier for filtering documents")
 ):
     """
-    Ask a question and get an answer using Hybrid Retrieval with spaCy enhancement.
+    Ask a question and get an answer using Hybrid Retrieval with Gemini LLM enhancement.
     
     This endpoint:
-    1. Parse query with spaCy to extract entities and noun phrases
+    1. Parse query with Gemini LLM to extract entities and noun phrases
     2. Enhanced vector search via Qdrant using enriched query
     3. Entity-based graph retrieval from Memgraph
     4. Document-level graph expansion for related chunks
@@ -203,8 +204,8 @@ async def ask_question(
     logger.info(f"❓ Received question from user {user_id}: '{query[:50]}...'")
     
     try:
-        # Step 1: Parse query with spaCy NLP
-        logger.info("🧠 Step 1: Processing query with spaCy NLP...")
+        # Step 1: Parse query with Gemini LLM
+        logger.info("🧠 Step 1: Processing query with Gemini LLM...")
         nlp_result = enhance_query_with_nlp(query)
         entity_texts = nlp_result["entity_texts"]
         phrases = nlp_result["phrases"]
@@ -245,9 +246,21 @@ async def ask_question(
             logger.info(f"Found {len(entity_chunks)} chunks via entity graph search")
         
         # Step 4: Document-level graph expansion (only if we have relevant vectors)
+        # Pass query entities for entity-based relevance filtering
         logger.info("🕸️ Step 4: Graph expansion in Memgraph...")
         vector_texts = [r["text"] for r in vector_results if r.get("text")]
-        graph_texts = expand_multi_chunk_context(vector_texts, limit_per_chunk=3)
+        raw_graph_texts = expand_multi_chunk_context(vector_texts, limit_per_chunk=3, query_entities=entity_texts)
+
+        # ---- NEW STEP: Semantic filtering of graph results ----
+        logger.info("🧠 Applying semantic filter to graph context...")
+        filtered_graph = filter_graph_chunks(
+            [{"text": t} for t in raw_graph_texts],
+            query,
+            embed_model,
+            threshold=0.42
+        )
+
+        graph_texts = [g["text"] for g in filtered_graph]
         
         # Step 5: Merge and dedupe all contexts
         logger.info("🔗 Step 5: Merging and deduplicating context...")
